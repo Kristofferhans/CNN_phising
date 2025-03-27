@@ -10,7 +10,7 @@ from torchtext.vocab import build_vocab_from_iterator
 import numpy as np
 
 # Load the dataset
-data_path = r"C:\Users\krist\Data science\island\master\Phishing_Email - Phishing_Email.csv"
+data_path = r"C:\Users\krist\Data science\island\CNN_phising\CNN_phising\Phishing_Email - Phishing_Email.csv"
 df = pd.read_csv(data_path)
 
 # Drop rows with missing values

@@ -37,7 +37,7 @@ class CNNTextClassifier(nn.Module):
         return x
 
 # Load the dataset (same as during training)
-data_path = r"C:\Users\krist\Data science\island\CNN_phising\Phishing_Email - Phishing_Email.csv"
+data_path = r"C:\Users\krist\Data science\island\CNN_phising\CNN_phising\Phishing_Email - Phishing_Email.csv"
 df = pd.read_csv(data_path)
 df = df.dropna()
 
