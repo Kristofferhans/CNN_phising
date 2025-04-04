@@ -7,131 +7,229 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from torchtext.data.utils import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
-import numpy as np
+from typing import List, Tuple, Iterator
 
-# Load the dataset
-data_path = r"C:\Users\krist\Data science\island\CNN_phising\CNN_phising\Phishing_Email - Phishing_Email.csv"
-df = pd.read_csv(data_path)
 
-# Drop rows with missing values
-df = df.dropna()
-
-# Encode the labels
-label_encoder = LabelEncoder()
-df['Email Type'] = label_encoder.fit_transform(df['Email Type'])
-
-# Split the data into training and testing sets
-train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
-
-# Tokenizer
-tokenizer = get_tokenizer("basic_english")
-
-# Build vocabulary
-def yield_tokens(data_iter):
-    for text in data_iter:
-        yield tokenizer(text)
-
-vocab = build_vocab_from_iterator(yield_tokens(train_df['Email Text']), specials=["<unk>"])
-vocab.set_default_index(vocab["<unk>"])
-
-# Convert text to indices
-def text_pipeline(text):
-    return [vocab[token] for token in tokenizer(text)]
-
-# Dataset class
 class EmailDataset(Dataset):
-    def __init__(self, df, text_pipeline):
+    """Custom Dataset for loading and processing email data."""
+    
+    def __init__(self, df: pd.DataFrame, text_pipeline: callable):
+        """
+        Args:
+            df: DataFrame containing email data
+            text_pipeline: Function to convert text to indices
+        """
         self.df = df
         self.text_pipeline = text_pipeline
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.df)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         text = self.df.iloc[idx]['Email Text']
         label = self.df.iloc[idx]['Email Type']
         text_indices = self.text_pipeline(text)
         return torch.tensor(text_indices, dtype=torch.long), torch.tensor(label, dtype=torch.long)
 
-# Create datasets
-train_dataset = EmailDataset(train_df, text_pipeline)
-test_dataset = EmailDataset(test_df, text_pipeline)
-
-# DataLoader
-def collate_batch(batch):
-    text_list, label_list = [], []
-    for (text, label) in batch:
-        text_list.append(text)
-        label_list.append(label)
-    return torch.nn.utils.rnn.pad_sequence(text_list, batch_first=True), torch.tensor(label_list)
-
-train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True, collate_fn=collate_batch)
-test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, collate_fn=collate_batch)
 
 class CNNTextClassifier(nn.Module):
-    def __init__(self, vocab_size, embed_dim, num_classes, kernel_sizes=[3, 4, 5], num_filters=100):
+    """CNN-based text classification model."""
+    
+    def __init__(self, vocab_size: int, embed_dim: int, num_classes: int, 
+                 kernel_sizes: List[int] = [3, 4, 5], num_filters: int = 100):
+        """
+        Args:
+            vocab_size: Size of the vocabulary
+            embed_dim: Dimension of word embeddings
+            num_classes: Number of output classes
+            kernel_sizes: List of kernel sizes for convolutional layers
+            num_filters: Number of filters per convolutional layer
+        """
         super(CNNTextClassifier, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
         self.convs = nn.ModuleList([
             nn.Conv2d(1, num_filters, (k, embed_dim)) for k in kernel_sizes
         ])
         self.fc = nn.Linear(len(kernel_sizes) * num_filters, num_classes)
+        self.dropout = nn.Dropout(0.5)  
 
-    def forward(self, x):
-        x = self.embedding(x)  # (batch_size, seq_len, embed_dim)
-        x = x.unsqueeze(1)  # (batch_size, 1, seq_len, embed_dim)
-        x = [torch.relu(conv(x)).squeeze(3) for conv in self.convs]  # [(batch_size, num_filters, seq_len - kernel_size + 1)]
-        x = [torch.max_pool1d(i, i.size(2)).squeeze(2) for i in x]  # [(batch_size, num_filters)]
-        x = torch.cat(x, 1)  # (batch_size, num_filters * len(kernel_sizes))
-        x = self.fc(x)  # (batch_size, num_classes)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.embedding(x)  
+        x = x.unsqueeze(1)  
+        
+        #applying each convolution and max pooling
+        conv_outputs = []
+        for conv in self.convs:
+            conv_out = torch.relu(conv(x)).squeeze(3) 
+            pooled_out = torch.max_pool1d(conv_out, conv_out.size(2)).squeeze(2)  
+            conv_outputs.append(pooled_out)
+            
+        x = torch.cat(conv_outputs, 1) 
+        x = self.dropout(x) 
+        x = self.fc(x)  
         return x
 
-# Hyperparameters
-vocab_size = len(vocab)
-embed_dim = 100
-num_classes = len(label_encoder.classes_)
-kernel_sizes = [3, 4, 5]
-num_filters = 100
 
-# Initialize the model
-model = CNNTextClassifier(vocab_size, embed_dim, num_classes, kernel_sizes, num_filters)
-
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+def yield_tokens(data_iter: Iterator[str], tokenizer: callable) -> Iterator[List[str]]:
+    """Yield tokens from text data."""
+    for text in data_iter:
+        yield tokenizer(text)
 
 
+def collate_batch(batch: List[Tuple[torch.Tensor, torch.Tensor]]) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Collate function for DataLoader to handle variable length sequences."""
+    text_list, label_list = [], []
+    for (text, label) in batch:
+        text_list.append(text)
+        label_list.append(label)
+    return (
+        torch.nn.utils.rnn.pad_sequence(text_list, batch_first=True), 
+        torch.stack(label_list)
+    )
 
-def train(model, train_loader, criterion, optimizer, num_epochs=5):
+
+def train_model(
+    model: nn.Module, 
+    train_loader: DataLoader, 
+    criterion: nn.Module, 
+    optimizer: optim.Optimizer, 
+    num_epochs: int = 5,
+    device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+) -> None:
+    """Train the model."""
     model.train()
+    model.to(device)
+    
     for epoch in range(num_epochs):
         total_loss = 0
         for texts, labels in train_loader:
+            texts, labels = texts.to(device), labels.to(device)
+            
             optimizer.zero_grad()
             outputs = model(texts)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
+            
             total_loss += loss.item()
-        print(f'Epoch {epoch+1}/{num_epochs}, Loss: {total_loss/len(train_loader)}')
+        
+        avg_loss = total_loss / len(train_loader)
+        print(f'Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}')
 
-train(model, train_loader, criterion, optimizer, num_epochs=5)
 
-def evaluate(model, test_loader, criterion):
+def evaluate_model(
+    model: nn.Module, 
+    test_loader: DataLoader, 
+    criterion: nn.Module,
+    device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+) -> float:
+    """Evaluate the model and return accuracy."""
     model.eval()
+    model.to(device)
+    
     total_loss = 0
     correct = 0
     total = 0
+    
     with torch.no_grad():
         for texts, labels in test_loader:
+            texts, labels = texts.to(device), labels.to(device)
+            
             outputs = model(texts)
             loss = criterion(outputs, labels)
             total_loss += loss.item()
+            
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
-    print(f'Test Loss: {total_loss/len(test_loader)}')
-    print(f'Accuracy: {100 * correct / total}%')
+    
+    avg_loss = total_loss / len(test_loader)
+    accuracy = 100 * correct / total
+    
+    print(f'Test Loss: {avg_loss:.4f}')
+    print(f'Accuracy: {accuracy:.2f}%')
+    
+    return accuracy
 
-evaluate(model, test_loader, criterion)
 
-torch.save(model.state_dict(), 'phishing_email_cnn.pth')
+def main():
+    #configuration
+    DATA_PATH = r"C:\Users\krist\Data science\island\CNN_phising\CNN_phising\Phishing_Email - Phishing_Email.csv"
+    BATCH_SIZE = 32
+    EMBED_DIM = 100
+    NUM_FILTERS = 100
+    KERNEL_SIZES = [3, 4, 5]
+    LEARNING_RATE = 0.001
+    NUM_EPOCHS = 10
+    TEST_SIZE = 0.2
+    RANDOM_STATE = 42
+    
+    #loading and preprocess data
+    df = pd.read_csv(DATA_PATH).dropna()
+    
+    #encoding labels
+    label_encoder = LabelEncoder()
+    df['Email Type'] = label_encoder.fit_transform(df['Email Type'])
+    
+    #splitting data
+    train_df, test_df = train_test_split(
+        df, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=df['Email Type']
+    )
+    
+    #tokenizing
+    tokenizer = get_tokenizer("basic_english")
+    vocab = build_vocab_from_iterator(
+        yield_tokens(train_df['Email Text'], tokenizer), 
+        specials=["<unk>"]
+    )
+    vocab.set_default_index(vocab["<unk>"])
+    
+    #text processing pipeline
+    def text_pipeline(text: str) -> List[int]:
+        return [vocab[token] for token in tokenizer(text)]
+    
+    #creating datasets and data loaders
+    train_dataset = EmailDataset(train_df, text_pipeline)
+    test_dataset = EmailDataset(test_df, text_pipeline)
+    
+    train_loader = DataLoader(
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_batch
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_batch
+    )
+    
+    #initalising model
+    model = CNNTextClassifier(
+        vocab_size=len(vocab),
+        embed_dim=EMBED_DIM,
+        num_classes=len(label_encoder.classes_),
+        kernel_sizes=KERNEL_SIZES,
+        num_filters=NUM_FILTERS
+    )
+    
+    #loss and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    
+    #train and evaluate
+    train_model(model, train_loader, criterion, optimizer, NUM_EPOCHS)
+    accuracy = evaluate_model(model, test_loader, criterion)
+    
+    #save model
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'vocab': vocab,
+        'label_encoder': label_encoder,
+        'config': {
+            'embed_dim': EMBED_DIM,
+            'num_filters': NUM_FILTERS,
+            'kernel_sizes': KERNEL_SIZES
+        }
+    }, 'phishing_email_cnn.pth')
+    
+    print(f"Model saved with test accuracy: {accuracy:.2f}%")
+
+
+if __name__ == "__main__":
+    main()
