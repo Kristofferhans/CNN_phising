@@ -67,26 +67,23 @@ except Exception as e:
     print(f"Error loading dataset: {e}")
     exit()
 
-# Preprocessing (same as in training)
+# First load the checkpoint to get the saved vocab and label encoder
+checkpoint = torch.load('phishing_email_cnn_rnn.pth')
+vocab = checkpoint['vocab']  # Use the saved vocab instead of rebuilding it
+label_encoder = checkpoint['label_encoder']  # Use the saved label encoder
+
+# Preprocessing (using the loaded label encoder)
 df = df.dropna()
-label_encoder = LabelEncoder()
-df['Email Type'] = label_encoder.fit_transform(df['Email Type'])
+df['Email Type'] = label_encoder.transform(df['Email Type'])  # Use transform() instead of fit_transform()
 
 # Split data (using same random_state for consistency)
 train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
 
-# Tokenizer and vocabulary (same as in training)
+# Tokenizer (same as in training)
 tokenizer = get_tokenizer("basic_english")
 
-def yield_tokens(data_iter):
-    for text in data_iter:
-        yield tokenizer(text)
-
-vocab = build_vocab_from_iterator(yield_tokens(train_df['Email Text']), specials=["<unk>"])
-vocab.set_default_index(vocab["<unk>"])
-
 def text_pipeline(text):
-    return [vocab[token] for token in tokenizer(text)]
+    return [vocab[token] for token in tokenizer(text)]  # Uses the loaded vocab
 
 # Dataset class (same as in training)
 class EmailDataset(Dataset):
@@ -115,8 +112,8 @@ def collate_batch(batch):
 
 test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, collate_fn=collate_batch)
 
-# Initialize and load the model
-vocab_size = len(vocab)
+# Initialize model with correct vocab size from checkpoint
+vocab_size = len(vocab)  # Now matches the checkpoint's embedding size
 embed_dim = 100
 num_classes = len(label_encoder.classes_)
 hidden_dim = 128
@@ -125,10 +122,13 @@ kernel_sizes = [3, 4, 5]
 num_filters = 100
 dropout = 0.5
 
-model = CNNRNNTextClassifier(vocab_size, embed_dim, num_classes, hidden_dim, num_layers, 
-                           kernel_sizes, num_filters, dropout)
+model = CNNRNNTextClassifier(
+    vocab_size, embed_dim, num_classes, hidden_dim, num_layers, 
+    kernel_sizes, num_filters, dropout
+)
 
-model.load_state_dict(torch.load('phishing_email_cnn_rnn.pth'))
+# Load model weights
+model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 
 # Evaluation function
