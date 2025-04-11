@@ -96,9 +96,26 @@ num_classes = len(label_encoder.classes_)
 kernel_sizes = [3, 4, 5]
 num_filters = 100
 
-model = CNNTextClassifier(vocab_size, embed_dim, num_classes, kernel_sizes, num_filters)
-model.load_state_dict(torch.load('phishing_email_cnn.pth'))
+# Load the saved model checkpoint
+checkpoint = torch.load('phishing_email_cnn.pth')
+
+# Initialize the model with the same parameters used during training
+model = CNNTextClassifier(
+    vocab_size=len(checkpoint['vocab']),
+    embed_dim=checkpoint['config']['embed_dim'],
+    num_classes=len(checkpoint['label_encoder'].classes_),
+    kernel_sizes=checkpoint['config']['kernel_sizes'],
+    num_filters=checkpoint['config']['num_filters']
+)
+
+# Load the model state dict
+model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
+
+# Update your local variables to match the saved ones
+vocab = checkpoint['vocab']
+label_encoder = checkpoint['label_encoder']
+
 
 # Evaluate the model
 y_true = []
