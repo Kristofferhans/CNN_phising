@@ -36,32 +36,37 @@ class CNNTextClassifier(nn.Module):
         x = self.fc(x)  # (batch_size, num_classes)
         return x
 
-# Load the dataset (same as during training)
-data_path = r"C:\Users\krist\Data science\island\CNN_phising\CNN_phising\Phishing_Email - Phishing_Email.csv"
+# Load the dataset with correct column names
+data_path = r"C:\Users\krist\Data science\island\CNN_phising\CNN_phising\phishing_email.csv"  # Updated path
 df = pd.read_csv(data_path)
 df = df.dropna()
 
-# Encode the labels
+# Print columns to verify
+print("Columns in dataset:", df.columns.tolist())
+print("\nFirst 5 rows:")
+print(df.head())
+
+# Encode the labels using correct column name
 label_encoder = LabelEncoder()
-df['Email Type'] = label_encoder.fit_transform(df['Email Type'])
+df['label'] = label_encoder.fit_transform(df['label'])  # Updated column name
 
 # Split the data into training and testing sets
 train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
 
-# Tokenizer and vocabulary (same as during training)
+# Tokenizer and vocabulary (using correct column name)
 tokenizer = get_tokenizer("basic_english")
 
 def yield_tokens(data_iter):
     for text in data_iter:
         yield tokenizer(text)
 
-vocab = build_vocab_from_iterator(yield_tokens(train_df['Email Text']), specials=["<unk>"])
+vocab = build_vocab_from_iterator(yield_tokens(train_df['text_combined']), specials=["<unk>"])  # Updated column name
 vocab.set_default_index(vocab["<unk>"])
 
 def text_pipeline(text):
     return [vocab[token] for token in tokenizer(text)]
 
-# Dataset class (same as during training)
+# Dataset class with correct column names
 class EmailDataset(Dataset):
     def __init__(self, df, text_pipeline):
         self.df = df
@@ -71,8 +76,8 @@ class EmailDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
-        text = self.df.iloc[idx]['Email Text']
-        label = self.df.iloc[idx]['Email Type']
+        text = self.df.iloc[idx]['text_combined']  # Updated column name
+        label = self.df.iloc[idx]['label']         # Updated column name
         text_indices = self.text_pipeline(text)
         return torch.tensor(text_indices, dtype=torch.long), torch.tensor(label, dtype=torch.long)
 
@@ -90,13 +95,6 @@ def collate_batch(batch):
 test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, collate_fn=collate_batch)
 
 # Load the saved model
-vocab_size = len(vocab)
-embed_dim = 100
-num_classes = len(label_encoder.classes_)
-kernel_sizes = [3, 4, 5]
-num_filters = 100
-
-# Load the saved model checkpoint
 checkpoint = torch.load('phishing_email_cnn.pth')
 
 # Initialize the model with the same parameters used during training
@@ -115,7 +113,6 @@ model.eval()
 # Update your local variables to match the saved ones
 vocab = checkpoint['vocab']
 label_encoder = checkpoint['label_encoder']
-
 
 # Evaluate the model
 y_true = []

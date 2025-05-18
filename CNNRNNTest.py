@@ -42,7 +42,7 @@ class CNNRNNTextClassifier(nn.Module):
         output = self.fc(rnn_out)
         return output
 
-# Function to find the correct data path (same as in training)
+# Function to find the correct data path
 def find_data_file(filename, search_paths):
     for path in search_paths:
         full_path = os.path.join(path, filename)
@@ -59,9 +59,14 @@ try:
         os.path.dirname(os.path.abspath(__file__)),
     ]
     
-    data_file = "Phishing_Email - Phishing_Email.csv"
+    data_file = "phishing_email.csv"  # Updated filename to match what we found
     data_path = find_data_file(data_file, possible_paths)
     df = pd.read_csv(data_path)
+
+    # Verify we have the correct columns
+    print("Columns in dataset:", df.columns.tolist())
+    print("\nFirst 5 rows:")
+    print(df.head())
 
 except Exception as e:
     print(f"Error loading dataset: {e}")
@@ -69,23 +74,23 @@ except Exception as e:
 
 # First load the checkpoint to get the saved vocab and label encoder
 checkpoint = torch.load('phishing_email_cnn_rnn.pth')
-vocab = checkpoint['vocab']  # Use the saved vocab instead of rebuilding it
-label_encoder = checkpoint['label_encoder']  # Use the saved label encoder
+vocab = checkpoint['vocab']
+label_encoder = checkpoint['label_encoder']
 
 # Preprocessing (using the loaded label encoder)
 df = df.dropna()
-df['Email Type'] = label_encoder.transform(df['Email Type'])  # Use transform() instead of fit_transform()
+df['label'] = label_encoder.transform(df['label'])  # Updated column name
 
 # Split data (using same random_state for consistency)
 train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
 
-# Tokenizer (same as in training)
+# Tokenizer
 tokenizer = get_tokenizer("basic_english")
 
 def text_pipeline(text):
-    return [vocab[token] for token in tokenizer(text)]  # Uses the loaded vocab
+    return [vocab[token] for token in tokenizer(text)]
 
-# Dataset class (same as in training)
+# Updated Dataset class with correct column names
 class EmailDataset(Dataset):
     def __init__(self, df, text_pipeline):
         self.df = df
@@ -95,8 +100,8 @@ class EmailDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
-        text = self.df.iloc[idx]['Email Text']
-        label = self.df.iloc[idx]['Email Type']
+        text = self.df.iloc[idx]['text_combined']  # Updated column name
+        label = self.df.iloc[idx]['label']         # Updated column name
         text_indices = self.text_pipeline(text)
         return torch.tensor(text_indices, dtype=torch.long), torch.tensor(label, dtype=torch.long)
 
@@ -113,7 +118,7 @@ def collate_batch(batch):
 test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, collate_fn=collate_batch)
 
 # Initialize model with correct vocab size from checkpoint
-vocab_size = len(vocab)  # Now matches the checkpoint's embedding size
+vocab_size = len(vocab)
 embed_dim = 100
 num_classes = len(label_encoder.classes_)
 hidden_dim = 128
@@ -171,16 +176,4 @@ def evaluate_model(model, test_loader):
 print("Evaluating model on test set...")
 accuracy, precision, recall, f1 = evaluate_model(model, test_loader)
 
-# Print class-wise metrics if needed
-print("\nDetailed Classification Report:")
-from sklearn.metrics import classification_report
-with torch.no_grad():
-    all_preds = []
-    all_labels = []
-    for texts, labels in test_loader:
-        outputs = model(texts)
-        _, preds = torch.max(outputs, 1)
-        all_preds.extend(preds.cpu().numpy())
-        all_labels.extend(labels.cpu().numpy())
-    
-print(classification_report(all_labels, all_preds, target_names=label_encoder.classes_))
+# Print class-wise metrics)

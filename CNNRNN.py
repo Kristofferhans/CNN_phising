@@ -9,6 +9,10 @@ from torchtext.data.utils import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
 import os
 from typing import List, Tuple, Iterator, Dict, Any
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix, classification_report
+import numpy as np
 
 
 class EmailDataset(Dataset):
@@ -27,8 +31,8 @@ class EmailDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        text = self.df.iloc[idx]['Email Text']
-        label = self.df.iloc[idx]['Email Type']
+        text = self.df.iloc[idx]['text_combined']
+        label = self.df.iloc[idx]['label']        
         text_indices = self.text_pipeline(text)
         return torch.tensor(text_indices, dtype=torch.long), torch.tensor(label, dtype=torch.long)
 
@@ -75,7 +79,7 @@ class CNNRNNTextClassifier(nn.Module):
         #embedding layer
         embedded = self.embedding(x)  
         
-        #cNN processing
+        #CNN processing
         embedded = embedded.unsqueeze(1) 
         
         #applying each convolution and max pooling
@@ -131,16 +135,18 @@ def collate_batch(batch: List[Tuple[torch.Tensor, torch.Tensor]]) -> Tuple[torch
 def train_model(
     model: nn.Module, 
     train_loader: DataLoader, 
+    val_loader: DataLoader,
     criterion: nn.Module, 
     optimizer: optim.Optimizer, 
     num_epochs: int = 5,
     device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 ) -> None:
-    """Train the model."""
+    """Train the model with validation."""
     model.train()
     model.to(device)
     
     for epoch in range(num_epochs):
+        model.train()
         total_loss = 0
         for texts, labels in train_loader:
             texts, labels = texts.to(device), labels.to(device)
@@ -154,22 +160,44 @@ def train_model(
             total_loss += loss.item()
         
         avg_loss = total_loss / len(train_loader)
-        print(f'Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}')
+        
+        #validating
+        model.eval()
+        val_loss = 0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for texts, labels in val_loader:
+                texts, labels = texts.to(device), labels.to(device)
+                outputs = model(texts)
+                val_loss += criterion(outputs, labels).item()
+                
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+        
+        val_accuracy = 100 * correct / total
+        avg_val_loss = val_loss / len(val_loader)
+        
+        print(f'Epoch {epoch+1}/{num_epochs}, Train Loss: {avg_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.2f}%')
 
 
 def evaluate_model(
     model: nn.Module, 
     test_loader: DataLoader, 
     criterion: nn.Module,
+    label_encoder: LabelEncoder,
     device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-) -> float:
-    """Evaluate the model and return accuracy."""
+) -> Tuple[float, np.ndarray, np.ndarray]:
+    """Evaluate the model and return accuracy and confusion matrix data."""
     model.eval()
     model.to(device)
     
     total_loss = 0
     correct = 0
     total = 0
+    all_preds = []
+    all_labels = []
     
     with torch.no_grad():
         for texts, labels in test_loader:
@@ -182,6 +210,10 @@ def evaluate_model(
             _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
+            
+            #storing predictions and labels for confusion matrix
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
     
     avg_loss = total_loss / len(test_loader)
     accuracy = 100 * correct / total
@@ -189,17 +221,31 @@ def evaluate_model(
     print(f'Test Loss: {avg_loss:.4f}')
     print(f'Accuracy: {accuracy:.2f}%')
     
-    return accuracy
+    #generating confusion matrix
+    cm = confusion_matrix(all_labels, all_preds)
+    class_names = label_encoder.classes_
+    
+    #plotting confusion matrix
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=class_names, 
+                yticklabels=class_names)
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.title('Confusion Matrix')
+    plt.show()
+    
+    return accuracy, all_labels, all_preds
 
 
 def main():
     #configuration
-    DATA_FILE = "Phishing_Email - Phishing_Email.csv"
+    DATA_FILE = "phishing_email.csv"
     SEARCH_PATHS = [
         r"C:\Users\krist\Data science\island\master",
         r"C:\Users\krist\Data science\island",
         r"C:\Users\krist\Data science\island\CNN_phising",
-        os.path.dirname(os.path.abspath(__file__)),  # Current script directory
+        os.path.dirname(os.path.abspath(__file__)),
     ]
     
     #model hyperparameters
@@ -212,7 +258,6 @@ def main():
     DROPOUT = 0.5
     LEARNING_RATE = 0.001
     NUM_EPOCHS = 10
-    TEST_SIZE = 0.2
     RANDOM_STATE = 42
     
     try:
@@ -221,19 +266,31 @@ def main():
         print(f"Loading dataset from: {data_path}")
         df = pd.read_csv(data_path).dropna()
         
-        #encoding labels
-        label_encoder = LabelEncoder()
-        df['Email Type'] = label_encoder.fit_transform(df['Email Type'])
+        #printing columns for verification
+        print("\nColumns in dataset:", df.columns.tolist())
+        print("\nFirst 5 rows:")
+        print(df.head())
         
-        #splitting data with stratification
-        train_df, test_df = train_test_split(
-            df, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=df['Email Type']
+        #encoding labels with correct column name
+        label_encoder = LabelEncoder()
+        df['label'] = label_encoder.fit_transform(df['label'])
+        
+        #checking class distribution
+        print("\nClass distribution:")
+        print(df['label'].value_counts())
+        
+        #splitting data into 60% train, 20% validation, 20% test
+        train_df, temp_df = train_test_split(
+            df, test_size=0.4, random_state=RANDOM_STATE, stratify=df['label']
+        )
+        val_df, test_df = train_test_split(
+            temp_df, test_size=0.5, random_state=RANDOM_STATE, stratify=temp_df['label']
         )
         
-        #tokenizer and vocabulary
+        #tokenizer and vocabulary (built only from training data)
         tokenizer = get_tokenizer("basic_english")
         vocab = build_vocab_from_iterator(
-            yield_tokens(train_df['Email Text'], tokenizer), 
+            yield_tokens(train_df['text_combined'], tokenizer), 
             specials=["<unk>"]
         )
         vocab.set_default_index(vocab["<unk>"])
@@ -244,10 +301,14 @@ def main():
         
         #creating datasets and data loaders
         train_dataset = EmailDataset(train_df, text_pipeline)
+        val_dataset = EmailDataset(val_df, text_pipeline)
         test_dataset = EmailDataset(test_df, text_pipeline)
         
         train_loader = DataLoader(
             train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_batch
+        )
+        val_loader = DataLoader(
+            val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_batch
         )
         test_loader = DataLoader(
             test_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_batch
@@ -269,14 +330,18 @@ def main():
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
         
-        #training and evaluate
+        #training with validation and evaluation
         print("\nStarting training...")
-        train_model(model, train_loader, criterion, optimizer, NUM_EPOCHS)
+        train_model(model, train_loader, val_loader, criterion, optimizer, NUM_EPOCHS)
         
-        print("\nEvaluating model...")
-        accuracy = evaluate_model(model, test_loader, criterion)
+        print("\nEvaluating model on test set...")
+        accuracy, true_labels, pred_labels = evaluate_model(model, test_loader, criterion, label_encoder)
         
-        #save model with additional information
+        # printing classification report
+        print("\nClassification Report:")
+        print(classification_report(true_labels, pred_labels, target_names=label_encoder.classes_))
+        
+        #saving model with additional information
         model_info = {
             'model_state_dict': model.state_dict(),
             'vocab': vocab,
