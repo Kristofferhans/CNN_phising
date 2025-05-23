@@ -1,179 +1,133 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, Dataset
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import train_test_split  # <-- move this here
 from torchtext.data.utils import get_tokenizer
-from torchtext.vocab import build_vocab_from_iterator
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from torch.nn.utils.rnn import pad_sequence
+import os
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.metrics import confusion_matrix
+from typing import List, Tuple
 import numpy as np
-import os
 
-# Load the saved model
-class CNNRNNTextClassifier(nn.Module):
-    def __init__(self, vocab_size, embed_dim, num_classes, hidden_dim=128, num_layers=2, 
-                 kernel_sizes=[3, 4, 5], num_filters=100, dropout=0.5):
-        super(CNNRNNTextClassifier, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
-        self.convs = nn.ModuleList([
-            nn.Conv2d(1, num_filters, (k, embed_dim)) for k in kernel_sizes
-        ])
-        self.rnn = nn.LSTM(input_size=num_filters * len(kernel_sizes),
-                          hidden_size=hidden_dim,
-                          num_layers=num_layers,
-                          bidirectional=True,
-                          batch_first=True,
-                          dropout=dropout if num_layers > 1 else 0)
-        self.fc = nn.Linear(hidden_dim * 2, num_classes)
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, x):
-        embedded = self.embedding(x)
-        embedded = embedded.unsqueeze(1)
-        conved = [torch.relu(conv(embedded)).squeeze(3) for conv in self.convs]
-        pooled = [torch.max_pool1d(i, i.size(2)).squeeze(2) for i in conved]
-        cnn_out = torch.cat(pooled, 1)
-        rnn_input = cnn_out.unsqueeze(1)
-        rnn_out, _ = self.rnn(rnn_input)
-        rnn_out = self.dropout(rnn_out[:, -1, :])
-        output = self.fc(rnn_out)
-        return output
 
-# Function to find the correct data path
-def find_data_file(filename, search_paths):
-    for path in search_paths:
-        full_path = os.path.join(path, filename)
-        if os.path.exists(full_path):
-            return full_path
-    raise FileNotFoundError(f"Could not find {filename} in any of these locations: {search_paths}")
-
-# Load the dataset
-try:
-    possible_paths = [
-        r"C:\Users\krist\Data science\island\master",
-        r"C:\Users\krist\Data science\island",
-        r"C:\Users\krist\Data science\island\CNN_phising",
-        os.path.dirname(os.path.abspath(__file__)),
-    ]
-    
-    data_file = "phishing_email.csv"  # Updated filename to match what we found
-    data_path = find_data_file(data_file, possible_paths)
-    df = pd.read_csv(data_path)
-
-    # Verify we have the correct columns
-    print("Columns in dataset:", df.columns.tolist())
-    print("\nFirst 5 rows:")
-    print(df.head())
-
-except Exception as e:
-    print(f"Error loading dataset: {e}")
-    exit()
-
-# First load the checkpoint to get the saved vocab and label encoder
-checkpoint = torch.load('phishing_email_cnn_rnn.pth')
-vocab = checkpoint['vocab']
-label_encoder = checkpoint['label_encoder']
-
-# Preprocessing (using the loaded label encoder)
-df = df.dropna()
-df['label'] = label_encoder.transform(df['label'])  # Updated column name
-
-# Split data (using same random_state for consistency)
-train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
-
-# Tokenizer
-tokenizer = get_tokenizer("basic_english")
-
-def text_pipeline(text):
-    return [vocab[token] for token in tokenizer(text)]
-
-# Updated Dataset class with correct column names
 class EmailDataset(Dataset):
-    def __init__(self, df, text_pipeline):
+    def __init__(self, df: pd.DataFrame, text_pipeline: callable):
         self.df = df
         self.text_pipeline = text_pipeline
 
     def __len__(self):
         return len(self.df)
 
-    def __getitem__(self, idx):
-        text = self.df.iloc[idx]['text_combined']  # Updated column name
-        label = self.df.iloc[idx]['label']         # Updated column name
-        text_indices = self.text_pipeline(text)
-        return torch.tensor(text_indices, dtype=torch.long), torch.tensor(label, dtype=torch.long)
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        text = self.df.iloc[idx]['feature']
+        label = self.df.iloc[idx]['label']
+        return torch.tensor(self.text_pipeline(text), dtype=torch.long), torch.tensor(label, dtype=torch.long)
 
-# Create test dataset and loader
-test_dataset = EmailDataset(test_df, text_pipeline)
+def collate_batch(batch: List[Tuple[torch.Tensor, torch.Tensor]]) -> Tuple[torch.Tensor, torch.Tensor]:
+    texts, labels = zip(*batch)
+    return pad_sequence(texts, batch_first=True), torch.stack(labels)
 
-def collate_batch(batch):
-    text_list, label_list = [], []
-    for (text, label) in batch:
-        text_list.append(text)
-        label_list.append(label)
-    return torch.nn.utils.rnn.pad_sequence(text_list, batch_first=True), torch.tensor(label_list)
+class CNNRNNTextClassifier(nn.Module):
+    def __init__(self, vocab_size, embed_dim, num_classes, hidden_dim, num_layers, kernel_sizes, num_filters, dropout):
+        super(CNNRNNTextClassifier, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.convs = nn.ModuleList([
+            nn.Conv2d(1, num_filters, (k, embed_dim)) for k in kernel_sizes
+        ])
+        self.rnn = nn.LSTM(
+            input_size=num_filters * len(kernel_sizes),
+            hidden_size=hidden_dim,
+            num_layers=num_layers,
+            bidirectional=True,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0
+        )
+        self.fc = nn.Linear(hidden_dim * 2, num_classes)
+        self.dropout = nn.Dropout(dropout)
 
-test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, collate_fn=collate_batch)
+    def forward(self, x):
+        x = self.embedding(x).unsqueeze(1)
+        convs = [torch.relu(conv(x)).squeeze(3) for conv in self.convs]
+        pools = [torch.max_pool1d(conv, conv.size(2)).squeeze(2) for conv in convs]
+        cnn_out = torch.cat(pools, dim=1).unsqueeze(1)
+        rnn_out, _ = self.rnn(cnn_out)
+        out = self.dropout(rnn_out[:, -1, :])
+        return self.fc(out)
 
-# Initialize model with correct vocab size from checkpoint
-vocab_size = len(vocab)
-embed_dim = 100
-num_classes = len(label_encoder.classes_)
-hidden_dim = 128
-num_layers = 2
-kernel_sizes = [3, 4, 5]
-num_filters = 100
-dropout = 0.5
+def load_model_and_vocab(model_path: str):
+    checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+    model_cfg = checkpoint['config']
+    vocab = checkpoint['vocab']
+    label_encoder = checkpoint['label_encoder']
+    
+    model = CNNRNNTextClassifier(
+        vocab_size=len(vocab),
+        embed_dim=model_cfg['embed_dim'],
+        num_classes=len(label_encoder.classes_),
+        hidden_dim=model_cfg['hidden_dim'],
+        num_layers=model_cfg['num_layers'],
+        kernel_sizes=model_cfg['kernel_sizes'],
+        num_filters=model_cfg['num_filters'],
+        dropout=model_cfg['dropout']
+    )
+    model.load_state_dict(checkpoint['model_state_dict'])
+    return model, vocab, label_encoder
 
-model = CNNRNNTextClassifier(
-    vocab_size, embed_dim, num_classes, hidden_dim, num_layers, 
-    kernel_sizes, num_filters, dropout
-)
+def main():
+    model_path = 'phishing_email_cnn_rnn.pth'
+    data_path = 'Phishing_Email - Phishing_Email.csv'
 
-# Load model weights
-model.load_state_dict(checkpoint['model_state_dict'])
-model.eval()
+    # Load model
+    model, vocab, label_encoder = load_model_and_vocab(model_path)
+    model.eval()
 
-# Evaluation function
-def evaluate_model(model, test_loader):
+    # Tokenizer and text pipeline
+    tokenizer = get_tokenizer("basic_english")
+    def text_pipeline(text): return [vocab[token] for token in tokenizer(text)]
+
+    # Load and prepare data
+    df = pd.read_csv(data_path, index_col=0).dropna()
+    print(df.columns.tolist())
+    label_map = {'legitimate': 0, 'phishing': 1}
+    df['label'] = df['label'].map(label_map)
+
+    # Now you can safely stratify or split
+    train_df, temp_df = train_test_split(df, test_size=0.4, stratify=df['label'], random_state=42)
+    val_df, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df['label'], random_state=42)
+
+    test_dataset = EmailDataset(test_df, text_pipeline)
+    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, collate_fn=collate_batch)
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
+
     all_preds = []
     all_labels = []
-    
+
     with torch.no_grad():
         for texts, labels in test_loader:
+            texts, labels = texts.to(device), labels.to(device)
             outputs = model(texts)
-            _, preds = torch.max(outputs, 1)
-            all_preds.extend(preds.cpu().numpy())
+            _, predicted = torch.max(outputs, 1)
+            all_preds.extend(predicted.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
-    
-    # Calculate metrics
-    accuracy = accuracy_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds, average='weighted')
-    recall = recall_score(all_labels, all_preds, average='weighted')
-    f1 = f1_score(all_labels, all_preds, average='weighted')
-    
-    print(f"Accuracy: {accuracy:.4f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall: {recall:.4f}")
-    print(f"F1-Score: {f1:.4f}")
-    
-    # Confusion matrix
+
     cm = confusion_matrix(all_labels, all_preds)
+    class_names = label_encoder.classes_
+
     plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
-                xticklabels=label_encoder.classes_, 
-                yticklabels=label_encoder.classes_)
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=class_names,
+                yticklabels=class_names)
     plt.xlabel('Predicted')
     plt.ylabel('Actual')
-    plt.title('Confusion Matrix')
+    plt.title('Confusion Matrix - Phishing Email')
+    plt.tight_layout()
     plt.show()
-    
-    return accuracy, precision, recall, f1
 
-# Run evaluation
-print("Evaluating model on test set...")
-accuracy, precision, recall, f1 = evaluate_model(model, test_loader)
-
-# Print class-wise metrics)
+if __name__ == '__main__':
+    main()

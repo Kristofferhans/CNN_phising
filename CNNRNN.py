@@ -139,11 +139,17 @@ def train_model(
     criterion: nn.Module, 
     optimizer: optim.Optimizer, 
     num_epochs: int = 5,
-    device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+    patience: int = 3,
+    delta: float = 0.01
 ) -> None:
     """Train the model with validation."""
     model.train()
     model.to(device)
+    
+    best_val_loss = float('inf')
+    epochs_without_improvement = 0
+
     
     for epoch in range(num_epochs):
         model.train()
@@ -181,6 +187,15 @@ def train_model(
         
         print(f'Epoch {epoch+1}/{num_epochs}, Train Loss: {avg_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.2f}%')
 
+        # Early stopping check
+        if avg_val_loss < best_val_loss - delta:
+            best_val_loss = avg_val_loss
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+            if epochs_without_improvement >= patience:
+                print(f"Early stopping triggered after {epoch+1} epochs.")
+                break
 
 def evaluate_model(
     model: nn.Module, 
@@ -332,14 +347,10 @@ def main():
         
         #training with validation and evaluation
         print("\nStarting training...")
-        train_model(model, train_loader, val_loader, criterion, optimizer, NUM_EPOCHS)
-        
+        train_model(model, train_loader, val_loader, criterion, optimizer, NUM_EPOCHS, patience=3, delta=0.001)        
         print("\nEvaluating model on test set...")
         accuracy, true_labels, pred_labels = evaluate_model(model, test_loader, criterion, label_encoder)
         
-        # printing classification report
-        print("\nClassification Report:")
-        print(classification_report(true_labels, pred_labels, target_names=label_encoder.classes_))
         
         #saving model with additional information
         model_info = {

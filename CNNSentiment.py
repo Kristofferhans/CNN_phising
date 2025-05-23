@@ -1,42 +1,35 @@
 import pandas as pd
-import xgboost as xgb
+from nltk.sentiment import SentimentIntensityAnalyzer
 from sklearn.model_selection import train_test_split
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, classification_report
-import matplotlib.pyplot as plt
-from textblob import TextBlob
-import scipy
+from sklearn.metrics import classification_report, confusion_matrix
+from xgboost import XGBClassifier
+import nltk
 
-#loading dataset
+# Download VADER lexicon for sentiment analysis
+nltk.download('vader_lexicon')
+sia = SentimentIntensityAnalyzer()
+
+# Load dataset
 df = pd.read_csv('phishing_email.csv')
-df.dropna(subset=['text_combined', 'label'], inplace=True)
 
-#Including sentiment polarity as a feature
-df['sentiment'] = df['text_combined'].apply(lambda x: TextBlob(x).sentiment.polarity)
+# Extract sentiment score
+def get_sentiment_score(text):
+    return sia.polarity_scores(str(text))['compound']
 
-#feature extraction using TF-IDF
-vectorizer = TfidfVectorizer(max_features=5000, stop_words='english')
-X_tfidf = vectorizer.fit_transform(df['text_combined'])
-y = df['label']
+df['sentiment_score'] = df['text_combined'].apply(get_sentiment_score)
 
-X_combined = scipy.sparse.hstack((X_tfidf, df[['sentiment']].values))
-#splitting data into training and testing
-X_train, X_test, y_train, y_test = train_test_split(X_combined, y, test_size=0.2, random_state=42)
+# Prepare features and labels
+X = df[['sentiment_score']].values  # Only using sentiment score
+y = df['label'].values
 
-#training XGBoost classifier
-model = xgb.XGBClassifier(use_label_encoder=False, eval_metric='logloss')
+# Train/test split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Train XGBoost classifier
+model = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
 model.fit(X_train, y_train)
 
-#prediction on test data
+# Predict and evaluate
 y_pred = model.predict(X_test)
 
-#eval model
-print("Classification Report:")
-print(classification_report(y_test, y_pred, target_names=["Legit", "Phishing"]))
-
-#confusion matrix
-cm = confusion_matrix(y_test, y_pred)
-disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Legit", "Phishing"])
-disp.plot(cmap=plt.cm.Blues)
-plt.title("Confusion Matrix - Legit vs Phishing Emails")
-plt.show()
+print("Confusion Matrix:\n", confusion_matrix(y_test, y_pred))

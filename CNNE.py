@@ -100,48 +100,67 @@ def train_model(
     criterion: nn.Module, 
     optimizer: optim.Optimizer, 
     num_epochs: int = 5,
-    device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device: torch.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
+    patience: int = 3,
+    delta: float = 0.01
 ) -> None:
-    """Train the model with validation."""
-    model.train()
+    """Train the model with early stopping based on validation loss."""
     model.to(device)
     print("Starting training...")
+    
+    best_val_loss = float('inf')
+    best_model_state = None
+    epochs_no_improve = 0
+
     for epoch in range(num_epochs):
         model.train()
         total_loss = 0
+
         for texts, labels in train_loader:
             texts, labels = texts.to(device), labels.to(device)
-            
             optimizer.zero_grad()
             outputs = model(texts)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            
             total_loss += loss.item()
-        
+
         avg_loss = total_loss / len(train_loader)
-        
-        #Validation
+
+        # Validation
         model.eval()
         val_loss = 0
         correct = 0
         total = 0
+
         with torch.no_grad():
             for texts, labels in val_loader:
                 texts, labels = texts.to(device), labels.to(device)
                 outputs = model(texts)
                 val_loss += criterion(outputs, labels).item()
-                
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
                 correct += (predicted == labels).sum().item()
-        
+
         val_accuracy = 100 * correct / total
         avg_val_loss = val_loss / len(val_loader)
-        
+
         print(f'Epoch {epoch+1}/{num_epochs}, Train Loss: {avg_loss:.4f}, Val Loss: {avg_val_loss:.4f}, Val Acc: {val_accuracy:.2f}%')
 
+        # Early stopping check
+        if avg_val_loss < best_val_loss - delta:
+            best_val_loss = avg_val_loss
+            best_model_state = model.state_dict()
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"Early stopping triggered after {epoch+1} epochs.")
+                break
+
+    # Load best model
+    if best_model_state:
+        model.load_state_dict(best_model_state)
 
 def evaluate_model(
     model: nn.Module, 
@@ -270,7 +289,7 @@ def main():
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     
     #train with validation and evaluate
-    train_model(model, train_loader, val_loader, criterion, optimizer, NUM_EPOCHS)
+    train_model(model, train_loader, val_loader, criterion, optimizer, NUM_EPOCHS, patience=3)
     accuracy, true_labels, pred_labels = evaluate_model(model, test_loader, criterion, label_encoder)
     
     #save model
