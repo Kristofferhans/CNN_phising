@@ -10,7 +10,7 @@ nltk.download('vader_lexicon')
 sia = SentimentIntensityAnalyzer()
 
 # Load dataset
-df = pd.read_csv('phishing_email.csv')
+df = pd.read_csv(r"C:\Users\krist\Data science\island\CNN_phising\phishing_email_no_duplicates.csv")
 
 # Extract sentiment score
 def get_sentiment_score(text):

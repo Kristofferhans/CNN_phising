@@ -79,7 +79,7 @@ def load_model_and_vocab(model_path: str):
 
 def main():
     model_path = 'phishing_email_cnn_rnn.pth'
-    data_path = 'Phishing_Email - Phishing_Email.csv'
+    data_path = r'C:\Users\krist\Data science\island\CNN_phising\Phishing_Email - Phishing_Email.csv'
 
     # Load model
     model, vocab, label_encoder = load_model_and_vocab(model_path)
@@ -95,11 +95,8 @@ def main():
     label_map = {'legitimate': 0, 'phishing': 1}
     df['label'] = df['label'].map(label_map)
 
-    # Now you can safely stratify or split
-    train_df, temp_df = train_test_split(df, test_size=0.4, stratify=df['label'], random_state=42)
-    val_df, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df['label'], random_state=42)
-
-    test_dataset = EmailDataset(test_df, text_pipeline)
+    # Use the entire dataset for testing
+    test_dataset = EmailDataset(df, text_pipeline)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, collate_fn=collate_batch)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -125,7 +122,7 @@ def main():
                 yticklabels=class_names)
     plt.xlabel('Predicted')
     plt.ylabel('Actual')
-    plt.title('Confusion Matrix - Phishing Email')
+    plt.title('Confusion Matrix - Phishing Email (Full Dataset)')
     plt.tight_layout()
     plt.show()
 

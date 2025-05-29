@@ -255,7 +255,7 @@ def evaluate_model(
 
 def main():
     #configuration
-    DATA_FILE = "phishing_email.csv"
+    DATA_FILE = r"C:\Users\krist\Data science\island\CNN_phising\phishing_email_no_duplicates.csv"
     SEARCH_PATHS = [
         r"C:\Users\krist\Data science\island\master",
         r"C:\Users\krist\Data science\island",
@@ -273,7 +273,10 @@ def main():
     DROPOUT = 0.5
     LEARNING_RATE = 0.001
     NUM_EPOCHS = 10
+    PATIENCE = 3
+    DELTA = 0.001
     RANDOM_STATE = 42
+
     
     try:
         #loading and preprocess data
@@ -347,7 +350,7 @@ def main():
         
         #training with validation and evaluation
         print("\nStarting training...")
-        train_model(model, train_loader, val_loader, criterion, optimizer, NUM_EPOCHS, patience=3, delta=0.001)        
+        train_model(model, train_loader, val_loader, criterion, optimizer, NUM_EPOCHS, patience=PATIENCE, delta=DELTA)
         print("\nEvaluating model on test set...")
         accuracy, true_labels, pred_labels = evaluate_model(model, test_loader, criterion, label_encoder)
         

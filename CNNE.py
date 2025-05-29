@@ -219,8 +219,8 @@ def evaluate_model(
 
 
 def main():
-    #configuration
-    DATA_PATH = r"C:\Users\krist\Data science\island\CNN_phising\CNN_phising\phishing_email.csv"
+    # Configuration
+    DATA_PATH = r"C:\Users\krist\Data science\island\CNN_phising\phishing_email_no_duplicates.csv"
     BATCH_SIZE = 32
     EMBED_DIM = 100
     NUM_FILTERS = 100
@@ -228,19 +228,20 @@ def main():
     LEARNING_RATE = 0.001
     NUM_EPOCHS = 10
     RANDOM_STATE = 42
-    
-    #loading and preprocess data
+    PATIENCE = 3
+    DELTA = 0.01
+
+    # Loading and preprocessing data
     df = pd.read_csv(DATA_PATH).dropna()
     
-    #encoding labels
+    # Encoding labels
     label_encoder = LabelEncoder()
     df['label'] = label_encoder.fit_transform(df['label'])
     
-    #checking class distribution
     print("\nClass distribution:")
     print(df['label'].value_counts())
     
-    #splitting data into 60% train, 20% validation, 20% test
+    # Splitting data
     train_df, temp_df = train_test_split(
         df, test_size=0.4, random_state=RANDOM_STATE, stratify=df['label']
     )
@@ -248,34 +249,26 @@ def main():
         temp_df, test_size=0.5, random_state=RANDOM_STATE, stratify=temp_df['label']
     )
     
-    #tokenizing - build vocab only from training data
+    # Tokenization and vocabulary building
     tokenizer = get_tokenizer("basic_english")
     vocab = build_vocab_from_iterator(
-        yield_tokens(train_df['text_combined'], tokenizer), 
-        specials=["<unk>"]
+        yield_tokens(train_df['text_combined'], tokenizer), specials=["<unk>"]
     )
     vocab.set_default_index(vocab["<unk>"])
     
-    #text processing pipeline
     def text_pipeline(text: str) -> List[int]:
         return [vocab[token] for token in tokenizer(text)]
     
-    #creating datasets and data loaders
+    # Dataset and DataLoaders
     train_dataset = EmailDataset(train_df, text_pipeline)
     val_dataset = EmailDataset(val_df, text_pipeline)
     test_dataset = EmailDataset(test_df, text_pipeline)
     
-    train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_batch
-    )
-    val_loader = DataLoader(
-        val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_batch
-    )
-    test_loader = DataLoader(
-        test_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_batch
-    )
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_batch)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_batch)
+    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_batch)
     
-    #initalising model
+    # Model setup
     model = CNNTextClassifier(
         vocab_size=len(vocab),
         embed_dim=EMBED_DIM,
@@ -284,15 +277,19 @@ def main():
         num_filters=NUM_FILTERS
     )
     
-    #loss and optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     
-    #train with validation and evaluate
-    train_model(model, train_loader, val_loader, criterion, optimizer, NUM_EPOCHS, patience=3)
+    # Training
+    train_model(
+        model, train_loader, val_loader, criterion, optimizer,
+        num_epochs=NUM_EPOCHS, patience=PATIENCE, delta=DELTA
+    )
+    
+    #Evaluation
     accuracy, true_labels, pred_labels = evaluate_model(model, test_loader, criterion, label_encoder)
     
-    #save model
+    # Saving model
     torch.save({
         'model_state_dict': model.state_dict(),
         'vocab': vocab,
@@ -300,16 +297,16 @@ def main():
         'config': {
             'embed_dim': EMBED_DIM,
             'num_filters': NUM_FILTERS,
-            'kernel_sizes': KERNEL_SIZES
+            'kernel_sizes': KERNEL_SIZES,
+            'patience': PATIENCE,
+            'delta': DELTA
         }
     }, 'phishing_email_cnn.pth')
     
     print(f"Model saved with test accuracy: {accuracy:.2f}%")
     
-    #printing classification report
     print("\nClassification Report:")
     print(classification_report(true_labels, pred_labels, target_names=label_encoder.classes_))
-
 
 if __name__ == "__main__":
     main()
