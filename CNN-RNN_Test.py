@@ -81,21 +81,21 @@ def main():
     model_path = 'phishing_email_cnn_rnn.pth'
     data_path = r'C:\Users\krist\Data science\island\CNN_phising\Phishing_Email - Phishing_Email.csv'
 
-    # Load model
+    #loading model
     model, vocab, label_encoder = load_model_and_vocab(model_path)
     model.eval()
 
-    # Tokenizer and text pipeline
+    #rokenizer and text pipeline
     tokenizer = get_tokenizer("basic_english")
     def text_pipeline(text): return [vocab[token] for token in tokenizer(text)]
 
-    # Load and prepare data
+    #loading and prepare data
     df = pd.read_csv(data_path, index_col=0).dropna()
     print(df.columns.tolist())
     label_map = {'legitimate': 0, 'phishing': 1}
     df['label'] = df['label'].map(label_map)
 
-    # Use the entire dataset for testing
+    #using the entire dataset for testing
     test_dataset = EmailDataset(df, text_pipeline)
     test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False, collate_fn=collate_batch)
 
